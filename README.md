@@ -11,7 +11,14 @@ npm run dev
 
 Puis ouvrir http://localhost:3000.
 
-La version actuelle est un prototype frontend : les questions sont conservées en mémoire du navigateur et les images sont prévisualisées localement. Les boutons de connexion utilisent un compte de démonstration.
+La version utilise Supabase lorsqu’il est configuré : authentification email/mot de passe, questions partagées et mises à jour en temps réel. Sans variables Supabase, l’interface affiche un avertissement et aucune fausse connexion n’est autorisée.
+
+## Configuration Supabase
+
+1. Copie `.env.local.example` vers `.env.local`.
+2. Renseigne l’URL du projet et la clé `anon` publique.
+3. Dans Supabase > SQL Editor, exécute `supabase/schema.sql`.
+4. Dans Authentication > Providers, active Email.
 
 ## Prochaine étape de production
 
