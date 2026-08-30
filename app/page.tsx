@@ -30,9 +30,10 @@ export default function Home() {
     supabase.auth.getUser().then(({ data }) => {
       if (data.user) setUser(data.user.user_metadata?.display_name || data.user.email?.split('@')[0] || 'Membre')
     })
-    const channel = supabase.channel('questions-live').on('postgres_changes', { event: '*', schema: 'public', table: 'questions' }, () => loadQuestions()).subscribe()
+    const client = supabase
+    const channel = client.channel('questions-live').on('postgres_changes', { event: '*', schema: 'public', table: 'questions' }, () => loadQuestions()).subscribe()
     loadQuestions()
-    return () => { supabase.removeChannel(channel) }
+    return () => { client.removeChannel(channel) }
   }, [])
 
   async function loadQuestions() {
