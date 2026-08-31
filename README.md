@@ -11,6 +11,14 @@ npm run dev
 
 Puis ouvrir http://localhost:3000.
 
+## Tests
+
+```bash
+npm test
+```
+
+Le test vérifie qu’une conversation active reste récupérable après une actualisation et qu’elle peut être rouverte depuis l’historique.
+
 La version utilise Supabase lorsqu’il est configuré : authentification email/mot de passe, historique des conversations, questions partagées, images, dessins et mises à jour en temps réel. Sans variables Supabase, l’interface affiche un avertissement et aucune fausse connexion n’est autorisée.
 
 ## Configuration Supabase

@@ -109,6 +109,7 @@ revoke all on function public.create_question(text, text) from public;
 grant execute on function public.create_question(text, text) to authenticated;
 
 drop policy if exists "anyone reads answers" on public.answers;
+drop policy if exists "users read allowed answers" on public.answers;
 drop policy if exists "signed in users answer" on public.answers;
 drop policy if exists "authors update answers" on public.answers;
 create policy "users read allowed answers" on public.answers for select using (public.can_read_question(question_id));
