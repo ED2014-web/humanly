@@ -105,10 +105,13 @@ export default function Home() {
   const [seconds, setSeconds] = useState(60)
   const [notice, setNotice] = useState('')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [activeQuestionId, setActiveQuestionId] = useState('')
+  const currentUserIdRef = useRef('')
 
   const loggedIn = Boolean(user && currentUserId)
   const availableQuestions = useMemo(() => questions.filter(question => question.status === 'open'), [questions])
   const historyQuestions = useMemo(() => questions.filter(question => question.authorId === currentUserId || question.answers.some(item => item.authorId === currentUserId)), [questions, currentUserId])
+  const activeQuestion = useMemo(() => questions.find(question => question.id === activeQuestionId), [questions, activeQuestionId])
 
   useEffect(() => {
     const client = supabase
@@ -117,13 +120,15 @@ export default function Home() {
     client.auth.getUser().then(({ data }) => {
       if (!active) return
       const member = data.user
+      currentUserIdRef.current = member?.id || ''
       setCurrentUserId(member?.id || '')
       setUser(member?.user_metadata?.display_name || member?.email?.split('@')[0] || '')
       void loadQuestions(member?.id || '')
     })
-    const channel = client.channel('humain-gpt-live').on('postgres_changes', { event: '*', schema: 'public', table: 'questions' }, () => { void loadQuestions() }).on('postgres_changes', { event: '*', schema: 'public', table: 'answers' }, () => { void loadQuestions() }).subscribe()
+    const channel = client.channel('humain-gpt-live').on('postgres_changes', { event: '*', schema: 'public', table: 'questions' }, () => { void loadQuestions(currentUserIdRef.current) }).on('postgres_changes', { event: '*', schema: 'public', table: 'answers' }, () => { void loadQuestions(currentUserIdRef.current) }).subscribe()
     const { data: listener } = client.auth.onAuthStateChange((_event, session) => {
       const member = session?.user
+      currentUserIdRef.current = member?.id || ''
       setCurrentUserId(member?.id || '')
       setUser(member?.user_metadata?.display_name || member?.email?.split('@')[0] || '')
       void loadQuestions(member?.id || '')
@@ -222,8 +227,17 @@ export default function Home() {
       if (upload.error) { setNotice(`L’image n’a pas pu être envoyée : ${upload.error.message}`); return }
       imagePath = upload.path
     }
-    const { error } = await client.from('questions').insert({ author_id: currentUserId, text: draft.trim(), image_path: imagePath })
-    if (error) setNotice(error.message); else { setDraft(''); removeAttachment('question'); await loadQuestions(); setMode('answer'); setNotice('Question publiée. Tu peux maintenant y répondre.') }
+    const { data: createdQuestion, error } = await client.from('questions').insert({ author_id: currentUserId, text: draft.trim(), image_path: imagePath }).select('id,created_at').single()
+    if (error) setNotice(error.message); else if (createdQuestion?.id) {
+      const newQuestion: Question = { id: createdQuestion.id, author: user || 'Vous', authorId: currentUserId, text: draft.trim(), time: new Date(createdQuestion.created_at || Date.now()).toLocaleString('fr-FR'), status: 'open', answers: [] }
+      setQuestions(items => [newQuestion, ...items.filter(item => item.id !== newQuestion.id)])
+      setActiveQuestionId(newQuestion.id)
+      setDraft('')
+      removeAttachment('question')
+      setMode('ask')
+      setNotice('Question envoyée. Une personne va pouvoir te répondre.')
+      await loadQuestions()
+    }
   }
 
   async function claimQuestion(question: Question) {
@@ -270,7 +284,7 @@ export default function Home() {
   return <main className={`chat-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
     <aside className="chat-sidebar">
       <div className="sidebar-top"><button className="brand" onClick={() => setMode('ask')}><span className="brand-mark">✦</span><span>HumainGPT</span></button><button className="collapse" onClick={() => setSidebarCollapsed(true)} aria-label="Réduire le menu">‹</button></div>
-      <button className="new-chat" onClick={() => { setMode('ask'); setDraft('') }}>＋ <span>Nouvelle question</span></button>
+      <button className="new-chat" onClick={() => { setMode('ask'); setDraft(''); setActiveQuestionId('') }}>＋ <span>Nouvelle question</span></button>
       <button className={`sidebar-item ${mode === 'history' ? 'active' : ''}`} onClick={() => setMode('history')}>▤ <span>Mes conversations</span></button>
       <div className="sidebar-spacer" />
       <div className="sidebar-links"><button className="sidebar-item" onClick={() => setSettingsOpen(true)}>⚙ <span>Paramètres</span></button></div>
@@ -280,17 +294,17 @@ export default function Home() {
 
     {sidebarCollapsed && <button className="expand-sidebar" onClick={() => setSidebarCollapsed(false)} aria-label="Afficher le menu">›</button>}
     <section className="chat-main">
-      <header className="chat-header"><button className="model-name" onClick={() => setMode('ask')}><span className="header-mark">✦</span> HumainGPT</button><div className="header-actions">{!loggedIn && <><button className="login-button" onClick={() => openAuth('signin')}>Se connecter</button><button className="signup-button" onClick={() => openAuth('signup')}>Inscription gratuite</button></> }</div></header>
+      <header className="chat-header"><button className="model-name" onClick={() => { setMode('ask'); setActiveQuestionId('') }}><span className="header-mark">✦</span> HumainGPT</button><div className="header-actions">{!loggedIn && <><button className="login-button" onClick={() => openAuth('signin')}>Se connecter</button><button className="signup-button" onClick={() => openAuth('signup')}>Inscription gratuite</button></> }</div></header>
       <div className="chat-body">
         {notice && <div className="toast">{notice}<button onClick={() => setNotice('')} aria-label="Fermer la notification">×</button></div>}
-        {mode === 'ask' && <><div className="hero"><div className="hero-mark">✦</div><h1>Qu’est-ce qui te ferait avancer ?</h1><p>Des réponses utiles, données par de vraies personnes.</p></div><form className="chat-composer" onSubmit={submitQuestion}><textarea value={draft} onChange={event => setDraft(event.target.value)} placeholder="Écris ta question à la communauté..." /><div className="composer-actions"><label className="plus-button" title="Ajouter une image">＋<input type="file" accept="image/*" onChange={event => chooseFile(event, 'question')} /></label>{questionPreview && <AttachmentPreview src={questionPreview} onRemove={() => removeAttachment('question')} />}{!questionPreview && <span className="human-only">Réponses humaines uniquement</span>}<button className={`send-button ${draft.trim().length >= 3 ? 'ready' : ''}`} disabled={draft.trim().length < 3} aria-label="Envoyer la question">↑</button></div></form><p className="composer-note">Tu pourras retrouver cette conversation dans <button onClick={() => setMode('history')}>Mes conversations</button>.</p></>}
+        {mode === 'ask' && activeQuestion ? <ActiveConversation question={activeQuestion} onNewQuestion={() => { setActiveQuestionId(''); setDraft('') }} /> : mode === 'ask' && <><div className="hero"><div className="hero-mark">✦</div><h1>Qu’est-ce qui te ferait avancer ?</h1><p>Des réponses utiles, données par de vraies personnes.</p></div><form className="chat-composer" onSubmit={submitQuestion}><textarea value={draft} onChange={event => setDraft(event.target.value)} placeholder="Écris ta question à la communauté..." /><div className="composer-actions"><label className="plus-button" title="Ajouter une image">＋<input type="file" accept="image/*" onChange={event => chooseFile(event, 'question')} /></label>{questionPreview && <AttachmentPreview src={questionPreview} onRemove={() => removeAttachment('question')} />}{!questionPreview && <span className="human-only">Réponses humaines uniquement</span>}<button className={`send-button ${draft.trim().length >= 3 ? 'ready' : ''}`} disabled={draft.trim().length < 3} aria-label="Envoyer la question">↑</button></div></form><p className="composer-note">Tu pourras retrouver cette conversation dans <button onClick={() => setMode('history')}>Mes conversations</button>.</p></>}
         {mode === 'answer' && <><div className="section-heading"><div><span className="eyebrow">Entraide en direct</span><h1>Aide quelqu’un aujourd’hui.</h1><p>Choisis une question, écris une réponse, ou dessine une idée.</p></div><span className="count-pill">{availableQuestions.length} disponible{availableQuestions.length > 1 ? 's' : ''}</span></div><div className="question-list">{availableQuestions.map(question => <QuestionCard key={question.id} question={question} selected={question.id === claimedId} seconds={seconds} answer={answer} answerPreview={answerPreview} currentUserId={currentUserId} onClaim={() => claimQuestion(question)} onAnswerChange={setAnswer} onSubmit={submitAnswer} onFile={event => chooseFile(event, 'answer')} onDraw={() => setDrawingOpen(true)} onRemoveImage={() => removeAttachment('answer')} />)}</div>{availableQuestions.length === 0 && <EmptyState onClick={() => setMode('ask')} />}</>}
         {mode === 'history' && <><div className="section-heading"><div><span className="eyebrow">Ton espace personnel</span><h1>Historique des conversations.</h1><p>Retrouve tes questions, tes réponses et tes images au même endroit.</p></div><span className="count-pill">{historyQuestions.length} conversation{historyQuestions.length > 1 ? 's' : ''}</span></div>{!loggedIn ? <EmptyState login={() => openAuth('signin')} /> : <div className="history-list">{historyQuestions.map(question => <HistoryCard key={question.id} question={question} currentUserId={currentUserId} />)}</div>}{loggedIn && historyQuestions.length === 0 && <EmptyState onClick={() => setMode('ask')} />}</>}
       </div>
       <footer>HumainGPT n’est pas une IA. Les réponses sont écrites par des personnes. <span>Conditions</span> · <span>Confidentialité</span></footer>
     </section>
     {drawingOpen && <DrawingPad onSave={setDrawing} onClose={() => setDrawingOpen(false)} />}
-    {settingsOpen && <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}><div className="settings-modal" onClick={event => event.stopPropagation()}><button className="modal-close" onClick={() => setSettingsOpen(false)}>×</button><span className="eyebrow">Préférences</span><h2>Paramètres</h2><p>Choisis l’espace à ouvrir par défaut.</p><button className={mode === 'ask' ? 'setting-choice active' : 'setting-choice'} onClick={() => { setMode('ask'); setSettingsOpen(false) }}>✎ Poser une question <span>{mode === 'ask' ? '✓' : ''}</span></button><button className={mode === 'answer' ? 'setting-choice active' : 'setting-choice'} onClick={() => { setMode('answer'); setSettingsOpen(false) }}>◌ Questions ouvertes <span>{mode === 'answer' ? `${availableQuestions.length} ouverte${availableQuestions.length > 1 ? 's' : ''}` : ''}</span></button><button className={mode === 'history' ? 'setting-choice active' : 'setting-choice'} onClick={() => { setMode('history'); setSettingsOpen(false) }}>▤ Ouvrir l’historique <span>{mode === 'history' ? '✓' : ''}</span></button></div></div>}
+    {settingsOpen && <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}><div className="settings-modal" onClick={event => event.stopPropagation()}><button className="modal-close" onClick={() => setSettingsOpen(false)}>×</button><span className="eyebrow">Préférences</span><h2>Paramètres</h2><p>Choisis l’espace à ouvrir par défaut.</p><button className={mode === 'ask' ? 'setting-choice active' : 'setting-choice'} onClick={() => { setMode('ask'); setActiveQuestionId(''); setSettingsOpen(false) }}>✎ Poser une question <span>{mode === 'ask' ? '✓' : ''}</span></button><button className={mode === 'answer' ? 'setting-choice active' : 'setting-choice'} onClick={() => { setMode('answer'); setSettingsOpen(false) }}>◌ Questions ouvertes <span>{mode === 'answer' ? `${availableQuestions.length} ouverte${availableQuestions.length > 1 ? 's' : ''}` : ''}</span></button><button className={mode === 'history' ? 'setting-choice active' : 'setting-choice'} onClick={() => { setMode('history'); setSettingsOpen(false) }}>▤ Ouvrir l’historique <span>{mode === 'history' ? '✓' : ''}</span></button></div></div>}
     {configMissing && <div className="config-warning">Connecte Supabase avec tes variables d’environnement pour partager les conversations.</div>}
     {authOpen && <div className="modal-backdrop" onClick={() => setAuthOpen(false)}><div className="auth-modal" onClick={event => event.stopPropagation()}><button className="modal-close" onClick={() => setAuthOpen(false)}>×</button><div className="hero-mark">✦</div><span className="eyebrow">HumainGPT</span><h2>{authMode === 'signup' ? 'Créer ton compte' : 'Se connecter'}</h2><p>Un compte est nécessaire pour participer et retrouver ton historique.</p><form onSubmit={authenticate}><label>Email<input name="email" type="email" value={email} onChange={event => setEmail(event.target.value)} required placeholder="vous@exemple.com" /></label><label className="password-label">Mot de passe<input name="password" type="password" value={password} onChange={event => setPassword(event.target.value)} required minLength={6} placeholder="6 caractères minimum" /></label><button className="modal-submit">{authMode === 'signup' ? 'Créer mon compte' : 'Se connecter'}</button></form><button className="auth-switch" onClick={() => setAuthMode(authMode === 'signup' ? 'signin' : 'signup')}>{authMode === 'signup' ? 'J’ai déjà un compte' : 'Créer un compte gratuitement'}</button><small>Aucune IA ne répond aux questions ici.</small></div></div>}
   </main>
@@ -302,6 +316,17 @@ function AttachmentPreview({ src, onRemove }: { src: string; onRemove: () => voi
 
 function QuestionCard({ question, selected, seconds, answer, answerPreview, currentUserId, onClaim, onAnswerChange, onSubmit, onFile, onDraw, onRemoveImage }: { question: Question; selected: boolean; seconds: number; answer: string; answerPreview: string; currentUserId: string; onClaim: () => void; onAnswerChange: (value: string) => void; onSubmit: (event: FormEvent) => void; onFile: (event: ChangeEvent<HTMLInputElement>) => void; onDraw: () => void; onRemoveImage: () => void }) {
   return <article className={`question-row ${selected ? 'selected' : ''}`}><div className="question-author"><span className="mini-avatar">{question.author[0]}</span><span><b>{question.author}{question.authorId === currentUserId ? ' · vous' : ''}</b><small>{question.time}</small></span></div><p>{question.text}</p>{question.image && <img className="content-image" src={question.image} alt="Image jointe à la question" />}{selected ? <form className="answer-form" onSubmit={onSubmit}><div className="answer-toolbar"><span className="countdown">{seconds}s</span><label className="tool-button" title="Ajouter une image">＋<input type="file" accept="image/*" onChange={onFile} /></label><button type="button" className="tool-button" onClick={onDraw} title="Dessiner">✎</button>{answerPreview && <AttachmentPreview src={answerPreview} onRemove={onRemoveImage} />}<span className="toolbar-hint">Répondre avec du texte ou un dessin</span></div><textarea value={answer} onChange={event => onAnswerChange(event.target.value)} placeholder="Écris ta réponse..." /><button className="answer-submit" disabled={!answer.trim() && !answerPreview}>Envoyer la réponse</button></form> : <button className="answer-link" disabled={Boolean(question.claimedBy)} onClick={onClaim}>{question.claimedBy === currentUserId ? 'Réservée par vous' : question.claimedBy ? 'Déjà réservée' : 'Répondre →'}</button>}</article>
+}
+
+function ActiveConversation({ question, onNewQuestion }: { question: Question; onNewQuestion: () => void }) {
+  const latestAnswer = question.answers[question.answers.length - 1]
+  const waiting = question.status === 'open' && !latestAnswer
+  return <div className="active-conversation">
+    <div className="conversation-label"><span className="conversation-icon">✦</span><span>Nouveau chat</span><span className="conversation-time">{question.time}</span></div>
+    <div className="message-card question-message"><span className="mini-avatar">{question.author[0]}</span><div><strong>Vous</strong><p>{question.text}</p>{question.image && <img className="content-image" src={question.image} alt="Image jointe à votre question" />}</div></div>
+    {waiting ? <div className="waiting-card"><span className="waiting-orb"><i /><i /><i /></span><div><strong>Réponse en cours</strong><span>Votre question a été envoyée à la communauté.</span></div></div> : latestAnswer && <div className="message-card answer-message"><span className="mini-avatar answer-avatar">{latestAnswer.author[0]}</span><div><strong>{latestAnswer.author}</strong><small>{latestAnswer.time}</small><p>{latestAnswer.text}</p>{latestAnswer.image && <img className="content-image" src={latestAnswer.image} alt="Image de la réponse" />}</div></div>}
+    <button className="new-conversation-link" onClick={onNewQuestion}>＋ Nouvelle question</button>
+  </div>
 }
 
 function HistoryCard({ question, currentUserId }: { question: Question; currentUserId: string }) {
