@@ -92,9 +92,6 @@ export default function Home() {
   const [currentUserId, setCurrentUserId] = useState('')
   const [authOpen, setAuthOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [helpOpen, setHelpOpen] = useState(false)
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [searchQuery, setSearchQuery] = useState('')
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -111,10 +108,7 @@ export default function Home() {
 
   const loggedIn = Boolean(user && currentUserId)
   const availableQuestions = useMemo(() => questions.filter(question => question.status === 'open'), [questions])
-  const historyQuestions = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase()
-    return questions.filter(question => (question.authorId === currentUserId || question.answers.some(item => item.authorId === currentUserId)) && (!query || `${question.text} ${question.answers.map(item => item.text).join(' ')}`.toLowerCase().includes(query)))
-  }, [questions, currentUserId, searchQuery])
+  const historyQuestions = useMemo(() => questions.filter(question => question.authorId === currentUserId || question.answers.some(item => item.authorId === currentUserId)), [questions, currentUserId])
 
   useEffect(() => {
     const client = supabase
@@ -137,27 +131,40 @@ export default function Home() {
     return () => { active = false; listener.subscription.unsubscribe(); void client.removeChannel(channel) }
   }, [])
 
+  async function getImageUrl(client: NonNullable<typeof supabase>, path?: string) {
+    if (!path) return undefined
+    const result = await client.storage.from('question-images').createSignedUrl(path, 60 * 60)
+    return result.data?.signedUrl
+  }
+
   async function loadQuestions(userId = currentUserId) {
     const client = supabase
     if (!client) return
-    let answerQuestionIds: string[] = []
+    const questionSelect = 'id,text,image_path,claimed_by,claimed_until,status,created_at,author_id,profiles(display_name)'
+    const openResult = await client.from('questions').select(questionSelect).eq('status', 'open').order('created_at', { ascending: false })
+    if (openResult.error || !openResult.data) return
+
+    // Les questions ouvertes sont publiques : on les charge sans filtre sur l’auteur.
+    // On ajoute seulement les anciennes conversations auxquelles l’utilisateur a participé.
+    let data = openResult.data as any[]
     if (userId) {
       const ownAnswers = await client.from('answers').select('question_id').eq('author_id', userId)
-      answerQuestionIds = (ownAnswers.data || []).map((item: any) => item.question_id).filter((id: string, index: number, ids: string[]) => ids.indexOf(id) === index)
+      const answerQuestionIds = (ownAnswers.data || []).map((item: any) => item.question_id).filter((id: string, index: number, ids: string[]) => ids.indexOf(id) === index)
+      const ownQuestions = await client.from('questions').select(questionSelect).eq('author_id', userId).eq('status', 'answered')
+      const answeredQuestions = answerQuestionIds.length ? await client.from('questions').select(questionSelect).in('id', answerQuestionIds).eq('status', 'answered') : { data: [], error: null }
+      const combined = [...data, ...(ownQuestions.data || []), ...(answeredQuestions.data || [])]
+      data = combined.filter((item: any, index: number, items: any[]) => items.findIndex(candidate => candidate.id === item.id) === index)
     }
-    const filters = userId && answerQuestionIds.length ? `status.eq.open,author_id.eq.${userId},id.in.(${answerQuestionIds.join(',')})` : userId ? `status.eq.open,author_id.eq.${userId}` : 'status.eq.open'
-    const { data, error } = await client.from('questions').select('id,text,image_path,claimed_by,claimed_until,status,created_at,author_id,profiles(display_name)').or(filters).order('created_at', { ascending: false })
-    if (error || !data) return
+
     const ids = data.map((item: any) => item.id)
     const answersByQuestion: Record<string, Answer[]> = {}
     if (ids.length) {
       const result = await client.from('answers').select('id,question_id,text,image_path,created_at,author_id,profiles(display_name)').in('question_id', ids).order('created_at', { ascending: true })
-      ;(result.data || []).forEach((item: any) => {
-        const answerItem: Answer = { id: item.id, text: item.text, authorId: item.author_id, author: item.profiles?.display_name || 'Membre', time: new Date(item.created_at).toLocaleString('fr-FR'), image: item.image_path ? client.storage.from('question-images').getPublicUrl(item.image_path).data.publicUrl : undefined }
-        answersByQuestion[item.question_id] = [...(answersByQuestion[item.question_id] || []), answerItem]
-      })
+      const answerItems = await Promise.all((result.data || []).map(async (item: any): Promise<Answer & { questionId: string }> => ({ id: item.id, questionId: item.question_id, text: item.text, authorId: item.author_id, author: item.profiles?.display_name || 'Membre', time: new Date(item.created_at).toLocaleString('fr-FR'), image: await getImageUrl(client, item.image_path) })))
+      answerItems.forEach(item => { answersByQuestion[item.questionId] = [...(answersByQuestion[item.questionId] || []), item] })
     }
-    setQuestions(data.map((item: any) => ({ id: item.id, text: item.text, authorId: item.author_id, author: item.profiles?.display_name || 'Membre', time: new Date(item.created_at).toLocaleString('fr-FR'), status: item.status, claimedBy: item.claimed_by || undefined, claimedUntil: item.claimed_until || undefined, image: item.image_path ? client.storage.from('question-images').getPublicUrl(item.image_path).data.publicUrl : undefined, answers: answersByQuestion[item.id] || [] })))
+    const questionItems = await Promise.all(data.map(async (item: any): Promise<Question> => ({ id: item.id, text: item.text, authorId: item.author_id, author: item.profiles?.display_name || 'Membre', time: new Date(item.created_at).toLocaleString('fr-FR'), status: item.status, claimedBy: item.claimed_by || undefined, claimedUntil: item.claimed_until || undefined, image: await getImageUrl(client, item.image_path), answers: answersByQuestion[item.id] || [] })))
+    setQuestions(questionItems)
   }
 
   useEffect(() => {
@@ -177,7 +184,9 @@ export default function Home() {
   function chooseFile(event: ChangeEvent<HTMLInputElement>, target: 'question' | 'answer') {
     const file = event.target.files?.[0]
     if (!file) return
-    if (!file.type.startsWith('image/')) { setNotice('Choisis une image au format PNG, JPG ou similaire.'); return }
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+    if (!allowedTypes.includes(file.type)) { setNotice('Choisis une image PNG, JPG, WEBP ou GIF.'); return }
+    if (file.size > 5 * 1024 * 1024) { setNotice('L’image doit faire 5 Mo maximum.'); return }
     const preview = URL.createObjectURL(file)
     if (target === 'question') { setQuestionImage(file); setQuestionPreview(preview) } else { setAnswerImage(file); setAnswerPreview(preview) }
   }
@@ -214,7 +223,7 @@ export default function Home() {
       imagePath = upload.path
     }
     const { error } = await client.from('questions').insert({ author_id: currentUserId, text: draft.trim(), image_path: imagePath })
-    if (error) setNotice(error.message); else { setDraft(''); removeAttachment('question'); setNotice('Question publiée dans la communauté.'); await loadQuestions() }
+    if (error) setNotice(error.message); else { setDraft(''); removeAttachment('question'); await loadQuestions(); setMode('answer'); setNotice('Question publiée. Tu peux maintenant y répondre.') }
   }
 
   async function claimQuestion(question: Question) {
@@ -238,10 +247,8 @@ export default function Home() {
       if (upload.error) { setNotice(`Le fichier n’a pas pu être envoyé : ${upload.error.message}`); return }
       imagePath = upload.path
     }
-    const { error } = await client.from('answers').insert({ question_id: claimedId, author_id: currentUserId, text: answer.trim() || 'Réponse en image', image_path: imagePath })
+    const { error } = await client.rpc('submit_answer', { question_uuid: claimedId, answer_text: answer.trim(), answer_image_path: imagePath || null })
     if (error) { setNotice(error.message); return }
-    const update = await client.from('questions').update({ status: 'answered', claimed_by: null, claimed_until: null }).eq('id', claimedId)
-    if (update.error) { setNotice(update.error.message); return }
     setAnswer(''); removeAttachment('answer'); setClaimedId(''); setNotice('Réponse envoyée, même à ta propre question.'); await loadQuestions()
   }
 
@@ -263,32 +270,27 @@ export default function Home() {
   return <main className={`chat-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
     <aside className="chat-sidebar">
       <div className="sidebar-top"><button className="brand" onClick={() => setMode('ask')}><span className="brand-mark">✦</span><span>HumainGPT</span></button><button className="collapse" onClick={() => setSidebarCollapsed(true)} aria-label="Réduire le menu">‹</button></div>
-      <button className="new-chat" onClick={() => { setMode('ask'); setDraft(''); setSearchQuery('') }}>＋ <span>Nouvelle question</span></button>
-      <button className="sidebar-item" onClick={() => { setMode('history'); setSearchOpen(value => !value) }}>⌕ <span>Rechercher dans l’historique</span></button>
-      {searchOpen && <div className="search-box"><input autoFocus value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Rechercher..." /><button onClick={() => { setSearchQuery(''); setSearchOpen(false) }}>×</button></div>}
-      <button className={`sidebar-item ${mode === 'answer' ? 'active' : ''}`} onClick={() => setMode('answer')}>◌ <span>Répondre aux questions</span><b>{availableQuestions.length || ''}</b></button>
+      <button className="new-chat" onClick={() => { setMode('ask'); setDraft('') }}>＋ <span>Nouvelle question</span></button>
       <button className={`sidebar-item ${mode === 'history' ? 'active' : ''}`} onClick={() => setMode('history')}>▤ <span>Mes conversations</span></button>
       <div className="sidebar-spacer" />
-      <div className="sidebar-links"><button className="sidebar-item" onClick={() => setSettingsOpen(true)}>⚙ <span>Paramètres</span></button><button className="sidebar-item" onClick={() => setHelpOpen(true)}>?</button></div>
+      <div className="sidebar-links"><button className="sidebar-item" onClick={() => setSettingsOpen(true)}>⚙ <span>Paramètres</span></button></div>
       {!loggedIn && <div className="sidebar-login"><strong>Participe à la communauté</strong><p>Connecte-toi pour poser des questions, répondre et partager des images.</p><button onClick={() => openAuth('signin')}>Se connecter</button></div>}
       {loggedIn && <button className="account-sidebar" onClick={signOut}><span className="mini-avatar">{user[0]}</span><span>{user}</span><small>Se déconnecter</small></button>}
     </aside>
 
     {sidebarCollapsed && <button className="expand-sidebar" onClick={() => setSidebarCollapsed(false)} aria-label="Afficher le menu">›</button>}
     <section className="chat-main">
-      <header className="chat-header"><button className="model-name" onClick={() => setMode('ask')}><span className="header-mark">✦</span> HumainGPT <span className="chevron">⌄</span></button><div className="header-actions"><span className="live-status"><i /> {availableQuestions.length} question{availableQuestions.length > 1 ? 's' : ''} ouverte{availableQuestions.length > 1 ? 's' : ''}</span>{!loggedIn && <><button className="login-button" onClick={() => openAuth('signin')}>Se connecter</button><button className="signup-button" onClick={() => openAuth('signup')}>Inscription gratuite</button></>}{loggedIn && <button className="account-button" onClick={signOut}><span className="mini-avatar">{user[0]}</span>{user}</button>}</div></header>
+      <header className="chat-header"><button className="model-name" onClick={() => setMode('ask')}><span className="header-mark">✦</span> HumainGPT</button><div className="header-actions">{!loggedIn && <><button className="login-button" onClick={() => openAuth('signin')}>Se connecter</button><button className="signup-button" onClick={() => openAuth('signup')}>Inscription gratuite</button></> }</div></header>
       <div className="chat-body">
         {notice && <div className="toast">{notice}<button onClick={() => setNotice('')} aria-label="Fermer la notification">×</button></div>}
-        <div className="context-row"><span className="context-dot" /> Espace HumainGPT <span className="context-separator">/</span> {mode === 'ask' ? 'Nouvelle question' : mode === 'answer' ? 'Questions en attente' : 'Historique'}</div>
         {mode === 'ask' && <><div className="hero"><div className="hero-mark">✦</div><h1>Qu’est-ce qui te ferait avancer ?</h1><p>Des réponses utiles, données par de vraies personnes.</p></div><form className="chat-composer" onSubmit={submitQuestion}><textarea value={draft} onChange={event => setDraft(event.target.value)} placeholder="Écris ta question à la communauté..." /><div className="composer-actions"><label className="plus-button" title="Ajouter une image">＋<input type="file" accept="image/*" onChange={event => chooseFile(event, 'question')} /></label>{questionPreview && <AttachmentPreview src={questionPreview} onRemove={() => removeAttachment('question')} />}{!questionPreview && <span className="human-only">Réponses humaines uniquement</span>}<button className={`send-button ${draft.trim().length >= 3 ? 'ready' : ''}`} disabled={draft.trim().length < 3} aria-label="Envoyer la question">↑</button></div></form><p className="composer-note">Tu pourras retrouver cette conversation dans <button onClick={() => setMode('history')}>Mes conversations</button>.</p></>}
         {mode === 'answer' && <><div className="section-heading"><div><span className="eyebrow">Entraide en direct</span><h1>Aide quelqu’un aujourd’hui.</h1><p>Choisis une question, écris une réponse, ou dessine une idée.</p></div><span className="count-pill">{availableQuestions.length} disponible{availableQuestions.length > 1 ? 's' : ''}</span></div><div className="question-list">{availableQuestions.map(question => <QuestionCard key={question.id} question={question} selected={question.id === claimedId} seconds={seconds} answer={answer} answerPreview={answerPreview} currentUserId={currentUserId} onClaim={() => claimQuestion(question)} onAnswerChange={setAnswer} onSubmit={submitAnswer} onFile={event => chooseFile(event, 'answer')} onDraw={() => setDrawingOpen(true)} onRemoveImage={() => removeAttachment('answer')} />)}</div>{availableQuestions.length === 0 && <EmptyState onClick={() => setMode('ask')} />}</>}
         {mode === 'history' && <><div className="section-heading"><div><span className="eyebrow">Ton espace personnel</span><h1>Historique des conversations.</h1><p>Retrouve tes questions, tes réponses et tes images au même endroit.</p></div><span className="count-pill">{historyQuestions.length} conversation{historyQuestions.length > 1 ? 's' : ''}</span></div>{!loggedIn ? <EmptyState login={() => openAuth('signin')} /> : <div className="history-list">{historyQuestions.map(question => <HistoryCard key={question.id} question={question} currentUserId={currentUserId} />)}</div>}{loggedIn && historyQuestions.length === 0 && <EmptyState onClick={() => setMode('ask')} />}</>}
       </div>
-      <footer>HumainGPT n’est pas une IA. Les réponses sont écrites par des personnes. <button onClick={() => setHelpOpen(true)}>Conditions</button> · <button onClick={() => setHelpOpen(true)}>Confidentialité</button></footer>
+      <footer>HumainGPT n’est pas une IA. Les réponses sont écrites par des personnes. <span>Conditions</span> · <span>Confidentialité</span></footer>
     </section>
     {drawingOpen && <DrawingPad onSave={setDrawing} onClose={() => setDrawingOpen(false)} />}
-    {settingsOpen && <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}><div className="settings-modal" onClick={event => event.stopPropagation()}><button className="modal-close" onClick={() => setSettingsOpen(false)}>×</button><span className="eyebrow">Préférences</span><h2>Paramètres</h2><p>Choisis l’espace à ouvrir par défaut.</p><button className={mode === 'ask' ? 'setting-choice active' : 'setting-choice'} onClick={() => { setMode('ask'); setSettingsOpen(false) }}>✎ Poser une question <span>{mode === 'ask' ? '✓' : ''}</span></button><button className={mode === 'answer' ? 'setting-choice active' : 'setting-choice'} onClick={() => { setMode('answer'); setSettingsOpen(false) }}>◌ Répondre aux questions <span>{mode === 'answer' ? '✓' : ''}</span></button><button className={mode === 'history' ? 'setting-choice active' : 'setting-choice'} onClick={() => { setMode('history'); setSettingsOpen(false) }}>▤ Ouvrir l’historique <span>{mode === 'history' ? '✓' : ''}</span></button></div></div>}
-    {helpOpen && <div className="modal-backdrop" onClick={() => setHelpOpen(false)}><div className="help-modal" onClick={event => event.stopPropagation()}><button className="modal-close" onClick={() => setHelpOpen(false)}>×</button><span className="hero-mark small-mark">✦</span><h2>Bienvenue sur HumainGPT</h2><p>Pose une question, ajoute une image, ou aide quelqu’un avec un message et un dessin. Tout est conservé dans ton historique quand tu es connecté.</p><button className="primary-button full-button" onClick={() => setHelpOpen(false)}>J’ai compris</button></div></div>}
+    {settingsOpen && <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}><div className="settings-modal" onClick={event => event.stopPropagation()}><button className="modal-close" onClick={() => setSettingsOpen(false)}>×</button><span className="eyebrow">Préférences</span><h2>Paramètres</h2><p>Choisis l’espace à ouvrir par défaut.</p><button className={mode === 'ask' ? 'setting-choice active' : 'setting-choice'} onClick={() => { setMode('ask'); setSettingsOpen(false) }}>✎ Poser une question <span>{mode === 'ask' ? '✓' : ''}</span></button><button className={mode === 'answer' ? 'setting-choice active' : 'setting-choice'} onClick={() => { setMode('answer'); setSettingsOpen(false) }}>◌ Questions ouvertes <span>{mode === 'answer' ? `${availableQuestions.length} ouverte${availableQuestions.length > 1 ? 's' : ''}` : ''}</span></button><button className={mode === 'history' ? 'setting-choice active' : 'setting-choice'} onClick={() => { setMode('history'); setSettingsOpen(false) }}>▤ Ouvrir l’historique <span>{mode === 'history' ? '✓' : ''}</span></button></div></div>}
     {configMissing && <div className="config-warning">Connecte Supabase avec tes variables d’environnement pour partager les conversations.</div>}
     {authOpen && <div className="modal-backdrop" onClick={() => setAuthOpen(false)}><div className="auth-modal" onClick={event => event.stopPropagation()}><button className="modal-close" onClick={() => setAuthOpen(false)}>×</button><div className="hero-mark">✦</div><span className="eyebrow">HumainGPT</span><h2>{authMode === 'signup' ? 'Créer ton compte' : 'Se connecter'}</h2><p>Un compte est nécessaire pour participer et retrouver ton historique.</p><form onSubmit={authenticate}><label>Email<input name="email" type="email" value={email} onChange={event => setEmail(event.target.value)} required placeholder="vous@exemple.com" /></label><label className="password-label">Mot de passe<input name="password" type="password" value={password} onChange={event => setPassword(event.target.value)} required minLength={6} placeholder="6 caractères minimum" /></label><button className="modal-submit">{authMode === 'signup' ? 'Créer mon compte' : 'Se connecter'}</button></form><button className="auth-switch" onClick={() => setAuthMode(authMode === 'signup' ? 'signin' : 'signup')}>{authMode === 'signup' ? 'J’ai déjà un compte' : 'Créer un compte gratuitement'}</button><small>Aucune IA ne répond aux questions ici.</small></div></div>}
   </main>
@@ -299,7 +301,7 @@ function AttachmentPreview({ src, onRemove }: { src: string; onRemove: () => voi
 }
 
 function QuestionCard({ question, selected, seconds, answer, answerPreview, currentUserId, onClaim, onAnswerChange, onSubmit, onFile, onDraw, onRemoveImage }: { question: Question; selected: boolean; seconds: number; answer: string; answerPreview: string; currentUserId: string; onClaim: () => void; onAnswerChange: (value: string) => void; onSubmit: (event: FormEvent) => void; onFile: (event: ChangeEvent<HTMLInputElement>) => void; onDraw: () => void; onRemoveImage: () => void }) {
-  return <article className={`question-row ${selected ? 'selected' : ''}`}><div className="question-author"><span className="mini-avatar">{question.author[0]}</span><span><b>{question.author}{question.authorId === currentUserId ? ' · vous' : ''}</b><small>{question.time}</small></span></div><p>{question.text}</p>{question.image && <img className="content-image" src={question.image} alt="Image jointe à la question" />}{selected ? <form className="answer-form" onSubmit={onSubmit}><div className="answer-toolbar"><span className="countdown">{seconds}s</span><label className="tool-button" title="Ajouter une image">＋<input type="file" accept="image/*" onChange={onFile} /></label><button type="button" className="tool-button" onClick={onDraw} title="Dessiner">✎</button>{answerPreview && <AttachmentPreview src={answerPreview} onRemove={onRemoveImage} />}<span className="toolbar-hint">Répondre avec du texte ou un dessin</span></div><textarea value={answer} onChange={event => onAnswerChange(event.target.value)} placeholder="Écris ta réponse..." /><button className="answer-submit" disabled={!answer.trim() && !answerPreview}>Envoyer la réponse</button></form> : <button className="answer-link" disabled={Boolean(question.claimedBy)} onClick={onClaim}>{question.claimedBy === currentUserId ? 'Réservée par vous' : question.claimedBy ? 'Déjà réservée' : question.authorId === currentUserId ? 'Répondre à ma question →' : 'Répondre →'}</button>}</article>
+  return <article className={`question-row ${selected ? 'selected' : ''}`}><div className="question-author"><span className="mini-avatar">{question.author[0]}</span><span><b>{question.author}{question.authorId === currentUserId ? ' · vous' : ''}</b><small>{question.time}</small></span></div><p>{question.text}</p>{question.image && <img className="content-image" src={question.image} alt="Image jointe à la question" />}{selected ? <form className="answer-form" onSubmit={onSubmit}><div className="answer-toolbar"><span className="countdown">{seconds}s</span><label className="tool-button" title="Ajouter une image">＋<input type="file" accept="image/*" onChange={onFile} /></label><button type="button" className="tool-button" onClick={onDraw} title="Dessiner">✎</button>{answerPreview && <AttachmentPreview src={answerPreview} onRemove={onRemoveImage} />}<span className="toolbar-hint">Répondre avec du texte ou un dessin</span></div><textarea value={answer} onChange={event => onAnswerChange(event.target.value)} placeholder="Écris ta réponse..." /><button className="answer-submit" disabled={!answer.trim() && !answerPreview}>Envoyer la réponse</button></form> : <button className="answer-link" disabled={Boolean(question.claimedBy)} onClick={onClaim}>{question.claimedBy === currentUserId ? 'Réservée par vous' : question.claimedBy ? 'Déjà réservée' : 'Répondre →'}</button>}</article>
 }
 
 function HistoryCard({ question, currentUserId }: { question: Question; currentUserId: string }) {

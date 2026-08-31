@@ -41,30 +41,55 @@ alter table public.questions enable row level security;
 alter table public.answers enable row level security;
 alter table public.reports enable row level security;
 
+-- Recréer les politiques permet de rejouer ce script sur une base déjà initialisée.
+create or replace function public.can_read_question(question_uuid uuid)
+returns boolean
+language sql
+security definer
+stable
+set search_path = public, pg_catalog
+as $$
+  select exists (
+    select 1 from public.questions q
+    where q.id = question_uuid
+      and (
+        q.status = 'open'
+        or q.author_id = auth.uid()
+        or exists (select 1 from public.answers a where a.question_id = q.id and a.author_id = auth.uid())
+      )
+  );
+$$;
+revoke all on function public.can_read_question(uuid) from public;
+grant execute on function public.can_read_question(uuid) to anon, authenticated;
+
 drop policy if exists "profiles are public" on public.profiles;
 drop policy if exists "users create their profile" on public.profiles;
 drop policy if exists "users update their profile" on public.profiles;
 create policy "profiles are public" on public.profiles for select using (true);
 create policy "users create their profile" on public.profiles for insert with check (auth.uid() = id);
-create policy "users update their profile" on public.profiles for update using (auth.uid() = id);
+create policy "users update their profile" on public.profiles for update using (auth.uid() = id) with check (auth.uid() = id);
 
 drop policy if exists "anyone reads visible questions" on public.questions;
-create policy "anyone reads visible questions" on public.questions for select using (
-  status = 'open'
-  or author_id = auth.uid()
-  or exists (select 1 from public.answers where answers.question_id = questions.id and answers.author_id = auth.uid())
-);
 drop policy if exists "signed in users ask" on public.questions;
 drop policy if exists "authors update questions" on public.questions;
-create policy "signed in users ask" on public.questions for insert with check (auth.uid() = author_id);
-create policy "authors update questions" on public.questions for update using (auth.uid() = author_id or auth.uid() = claimed_by);
+create policy "anyone reads visible questions" on public.questions for select using (public.can_read_question(id));
+create policy "signed in users ask" on public.questions for insert with check (
+  auth.uid() = author_id
+  and status = 'open'
+  and claimed_by is null
+  and claimed_until is null
+  and (image_path is null or (
+    (storage.foldername(image_path))[1] = 'questions'
+    and (storage.foldername(image_path))[2] = auth.uid()::text
+  ))
+);
+-- Les questions ne sont plus modifiables directement par le navigateur. Les changements sensibles passent par une fonction contrôlée.
 
 drop policy if exists "anyone reads answers" on public.answers;
-create policy "anyone reads answers" on public.answers for select using (true);
 drop policy if exists "signed in users answer" on public.answers;
 drop policy if exists "authors update answers" on public.answers;
-create policy "signed in users answer" on public.answers for insert with check (auth.uid() = author_id);
-create policy "authors update answers" on public.answers for update using (auth.uid() = author_id);
+create policy "users read allowed answers" on public.answers for select using (public.can_read_question(question_id));
+-- Pas de policy INSERT/UPDATE : une réponse doit passer par submit_answer().
 
 drop policy if exists "signed in users report" on public.reports;
 create policy "signed in users report" on public.reports for insert with check (auth.uid() = reporter_id);
@@ -72,10 +97,12 @@ create policy "signed in users report" on public.reports for insert with check (
 create or replace function public.claim_question(question_uuid uuid)
 returns public.questions
 language plpgsql
-security invoker
+security definer
+set search_path = public, pg_catalog
 as $$
 declare result public.questions;
 begin
+  if auth.uid() is null then raise exception 'AUTHENTICATION_REQUIRED'; end if;
   update public.questions
   set claimed_by = auth.uid(), claimed_until = now() + interval '1 minute'
   where id = question_uuid
@@ -87,11 +114,54 @@ begin
 end;
 $$;
 
+create or replace function public.submit_answer(question_uuid uuid, answer_text text, answer_image_path text default null)
+returns public.answers
+language plpgsql
+security definer
+set search_path = public, pg_catalog
+as $$
+declare result public.answers;
+begin
+  if auth.uid() is null then raise exception 'AUTHENTICATION_REQUIRED'; end if;
+  if char_length(trim(coalesce(answer_text, ''))) = 0 and answer_image_path is null then raise exception 'ANSWER_EMPTY'; end if;
+  if answer_image_path is not null and (
+    (storage.foldername(answer_image_path))[1] <> 'answers'
+    or (storage.foldername(answer_image_path))[2] <> auth.uid()::text
+  ) then raise exception 'INVALID_ATTACHMENT_PATH'; end if;
+
+  insert into public.answers (question_id, author_id, text, image_path)
+  select question_uuid, auth.uid(), coalesce(nullif(trim(answer_text), ''), 'Réponse en image'), answer_image_path
+  from public.questions q
+  where q.id = question_uuid
+    and q.status = 'open'
+    and q.claimed_by = auth.uid()
+    and q.claimed_until is not null
+    and q.claimed_until > now()
+  returning * into result;
+
+  if result.id is null then raise exception 'QUESTION_NOT_RESERVED'; end if;
+  update public.questions
+  set status = 'answered', claimed_by = null, claimed_until = null
+  where id = question_uuid and claimed_by = auth.uid();
+  return result;
+end;
+$$;
+
 create or replace function public.release_expired_claims()
-returns void language sql security definer as $$
+returns void
+language sql
+security definer
+set search_path = public, pg_catalog
+as $$
   update public.questions set claimed_by = null, claimed_until = null
   where status = 'open' and claimed_until is not null and claimed_until < now();
 $$;
+
+revoke all on function public.claim_question(uuid) from public;
+revoke all on function public.submit_answer(uuid, text, text) from public;
+revoke all on function public.release_expired_claims() from public;
+grant execute on function public.claim_question(uuid) to authenticated;
+grant execute on function public.submit_answer(uuid, text, text) to authenticated;
 
 do $$
 begin
@@ -111,8 +181,24 @@ begin
   end if;
 end $$;
 
-insert into storage.buckets (id, name, public) values ('question-images', 'question-images', true) on conflict (id) do nothing;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('question-images', 'question-images', false, 5242880, array['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+on conflict (id) do update set public = false, file_size_limit = 5242880, allowed_mime_types = excluded.allowed_mime_types;
+
 drop policy if exists "authenticated users upload images" on storage.objects;
 drop policy if exists "anyone reads question images" on storage.objects;
-create policy "authenticated users upload images" on storage.objects for insert to authenticated with check (bucket_id = 'question-images');
-create policy "anyone reads question images" on storage.objects for select using (bucket_id = 'question-images');
+drop policy if exists "authenticated users read images" on storage.objects;
+drop policy if exists "users read allowed images" on storage.objects;
+create policy "authenticated users upload images" on storage.objects for insert to authenticated with check (
+  bucket_id = 'question-images'
+  and (storage.foldername(name))[2] = auth.uid()::text
+  and (storage.foldername(name))[1] in ('questions', 'answers')
+);
+create policy "users read allowed images" on storage.objects for select using (
+  bucket_id = 'question-images'
+  and (
+    (storage.foldername(name))[2] = auth.uid()::text
+    or exists (select 1 from public.questions q where q.image_path = name and public.can_read_question(q.id))
+    or exists (select 1 from public.answers a where a.image_path = name and public.can_read_question(a.question_id))
+  )
+);
