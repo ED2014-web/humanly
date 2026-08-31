@@ -19,7 +19,7 @@ npm test
 
 Le test vérifie qu’une conversation active reste récupérable après une actualisation et qu’elle peut être rouverte depuis l’historique.
 
-La version utilise Supabase lorsqu’il est configuré : authentification email/mot de passe, historique des conversations, questions partagées, pièces jointes, dessins et mises à jour en temps réel. Sans variables Supabase, l’interface affiche un avertissement et aucune fausse connexion n’est autorisée. Les pièces jointes passent par une route serveur qui contrôle le nom, l’extension, le MIME déclaré, la signature binaire, la taille et VirusTotal avant stockage.
+La version utilise Supabase lorsqu’il est configuré : authentification email/mot de passe, historique des conversations, questions partagées, pièces jointes, dessins et mises à jour en temps réel. Sans variables Supabase, l’interface affiche un avertissement et aucune fausse connexion n’est autorisée. Les pièces jointes passent par une route serveur qui contrôle le nom, l’extension, le MIME déclaré, la signature binaire, la taille et validation binaire avant stockage.
 
 ## Configuration Supabase
 
@@ -39,9 +39,8 @@ Pour rendre l’application réellement multi-utilisateurs et accessible à tous
 5. Créer un bucket Storage privé pour les pièces jointes.
 6. Ajouter les variables `NEXT_PUBLIC_SUPABASE_URL` et `NEXT_PUBLIC_SUPABASE_ANON_KEY` dans Vercel.
 7. Importer le dépôt GitHub dans Vercel.
-8. Créer un compte gratuit sur [VirusTotal](https://www.virustotal.com) et obtenir une clé API.
-9. Configurer `SUPABASE_SERVICE_ROLE_KEY` et `VIRUSTOTAL_API_KEY` uniquement côté serveur ; ne jamais exposer ces clés au navigateur.
+8. Configurer `SUPABASE_SERVICE_ROLE_KEY` uniquement côté serveur ; ne jamais exposer cette clé au navigateur.
 
-Sans `VIRUSTOTAL_API_KEY`, les uploads sont refusés (fail-closed). Les extensions exécutables, scripts à risque et SVG sont bloqués, et les formats autorisés sont contrôlés par signature binaire lorsque cela est possible.
+Les extensions exécutables, scripts à risque et SVG sont bloqués, et les formats autorisés sont contrôlés par signature binaire lorsque cela est possible.
 
 Le verrouillage d’une question est validé côté serveur avec une expiration atomique (`claimed_until`), et non uniquement dans le navigateur. Les pièces jointes et dessins sont envoyés dans le bucket `question-images`, enregistrés comme uploads `clean`, puis référencés par les tables `questions`, `answers` et `messages`. Pour une base existante, réexécute le script SQL : ses politiques sont idempotentes pour les éléments mis à jour.
