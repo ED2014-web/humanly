@@ -40,7 +40,7 @@ async function cleanupExpiredFiles(admin: any) {
 
 export async function POST(request: Request) {
   const contentLength = Number(request.headers.get('content-length') || 0)
-  if (contentLength > 21 * 1024 * 1024) return fail('La requête dépasse la taille maximale autorisée.', 413)
+  if (contentLength > 31 * 1024 * 1024) return fail('La requête dépasse la taille maximale autorisée.', 413)
   if (!supabaseUrl || !supabaseKey || !serviceRoleKey) return fail('Upload sécurisé non configuré côté serveur.', 503)
   try {
     const form = await request.formData()

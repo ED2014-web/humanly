@@ -42,3 +42,6 @@ end;
 $$;
 revoke all on function public.cleanup_expired_files() from public;
 grant execute on function public.cleanup_expired_files() to service_role;
+
+-- Mettre à jour la limite de taille du bucket à 30 Mo
+update storage.buckets set file_size_limit = 31457280 where id = 'question-images';

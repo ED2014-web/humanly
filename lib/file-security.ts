@@ -1,4 +1,4 @@
-export const MAX_FILE_SIZE = 20 * 1024 * 1024
+export const MAX_FILE_SIZE = 30 * 1024 * 1024
 
 const BLOCKED_EXTENSIONS = new Set([
   'ade', 'adp', 'app', 'apk', 'bat', 'bin', 'cab', 'cmd', 'com', 'cpl', 'dll', 'dmg', 'exe', 'gadget',
@@ -137,7 +137,7 @@ export async function validateFile(file: Blob, name: string, declaredType: strin
   const extension = extensionOf(cleanName)
   const mime = (declaredType || 'application/octet-stream').toLowerCase().split(';')[0].trim()
   if (!cleanName || cleanName.length > 180 || /[\u0000-\u001f\u007f\\/]/.test(cleanName)) throw new Error('Nom de fichier invalide.')
-  if (file.size <= 0 || file.size > MAX_FILE_SIZE) throw new Error('Le fichier doit faire entre 1 octet et 20 Mo.')
+  if (file.size <= 0 || file.size > MAX_FILE_SIZE) throw new Error('Le fichier doit faire entre 1 octet et 30 Mo.')
   if (!extension || BLOCKED_EXTENSIONS.has(extension)) throw new Error('Cette extension de fichier est bloquée pour des raisons de sécurité.')
   const expectedMimes = MIME_BY_EXTENSION[extension]
   if (!expectedMimes && !TEXT_EXTENSIONS.includes(extension)) throw new Error(`L’extension .${extension} n’est pas autorisée.`)

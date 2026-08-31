@@ -53,7 +53,7 @@ create table if not exists public.file_uploads (
   uploader_id uuid not null references auth.users(id) on delete cascade,
   file_name text not null check (char_length(file_name) between 1 and 180),
   file_type text not null,
-  file_size bigint not null check (file_size between 1 and 20971520),
+  file_size bigint not null check (file_size between 1 and 31457280),
   sha256 text not null check (sha256 ~ '^[0-9a-f]{64}$'),
   scan_status text not null check (scan_status in ('clean', 'infected', 'failed')),
   scanner text not null,
@@ -152,7 +152,7 @@ declare result public.questions;
 begin
   if auth.uid() is null then raise exception 'AUTHENTICATION_REQUIRED'; end if;
   if char_length(trim(coalesce(question_text, ''))) < 3 or char_length(trim(question_text)) > 2000 then raise exception 'QUESTION_INVALID'; end if;
-  if question_file_size is not null and (question_file_size < 0 or question_file_size > 20971520) then raise exception 'FILE_TOO_LARGE'; end if;
+  if question_file_size is not null and (question_file_size < 0 or question_file_size > 31457280) then raise exception 'FILE_TOO_LARGE'; end if;
   if question_file_path is not null and not public.is_clean_upload(question_file_path, 'questions', auth.uid(), question_file_name, question_file_type, question_file_size) then raise exception 'ATTACHMENT_NOT_SCANNED'; end if;
   insert into public.questions (author_id, text, file_path, file_name, file_type, file_size)
   values (auth.uid(), trim(question_text), question_file_path, nullif(trim(question_file_name), ''), nullif(trim(question_file_type), ''), question_file_size)
@@ -207,7 +207,7 @@ declare result public.answers;
 begin
   if auth.uid() is null then raise exception 'AUTHENTICATION_REQUIRED'; end if;
   if char_length(trim(coalesce(answer_text, ''))) = 0 and answer_file_path is null then raise exception 'ANSWER_EMPTY'; end if;
-  if answer_file_size is not null and (answer_file_size < 0 or answer_file_size > 20971520) then raise exception 'FILE_TOO_LARGE'; end if;
+  if answer_file_size is not null and (answer_file_size < 0 or answer_file_size > 31457280) then raise exception 'FILE_TOO_LARGE'; end if;
   if answer_file_path is not null and not public.is_clean_upload(answer_file_path, 'answers', auth.uid(), answer_file_name, answer_file_type, answer_file_size) then raise exception 'ATTACHMENT_NOT_SCANNED'; end if;
   insert into public.answers (question_id, author_id, text, file_path, file_name, file_type, file_size)
   select question_uuid, auth.uid(), coalesce(nullif(trim(answer_text), ''), 'Réponse avec fichier'), answer_file_path, nullif(trim(answer_file_name), ''), nullif(trim(answer_file_type), ''), answer_file_size
@@ -232,7 +232,7 @@ begin
   if auth.uid() is null then raise exception 'AUTHENTICATION_REQUIRED'; end if;
   if char_length(trim(coalesce(message_text, ''))) = 0 and message_file_path is null then raise exception 'MESSAGE_EMPTY'; end if;
   if char_length(trim(coalesce(message_text, ''))) > 4000 then raise exception 'MESSAGE_INVALID'; end if;
-  if message_file_size is not null and (message_file_size < 0 or message_file_size > 20971520) then raise exception 'FILE_TOO_LARGE'; end if;
+  if message_file_size is not null and (message_file_size < 0 or message_file_size > 31457280) then raise exception 'FILE_TOO_LARGE'; end if;
   if message_file_path is not null and not public.is_clean_upload(message_file_path, 'messages', auth.uid(), message_file_name, message_file_type, message_file_size) then raise exception 'ATTACHMENT_NOT_SCANNED'; end if;
   insert into public.messages (question_id, author_id, text, file_path, file_name, file_type, file_size)
   select question_uuid, auth.uid(), coalesce(nullif(trim(message_text), ''), 'Message avec fichier'), message_file_path, nullif(trim(message_file_name), ''), nullif(trim(message_file_type), ''), message_file_size
@@ -396,8 +396,8 @@ begin
 end $$;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('question-images', 'question-images', false, 20971520, null)
-on conflict (id) do update set public = false, file_size_limit = 20971520, allowed_mime_types = null;
+values ('question-images', 'question-images', false, 31457280, null)
+on conflict (id) do update set public = false, file_size_limit = 31457280, allowed_mime_types = null;
 
 drop policy if exists "authenticated users upload images" on storage.objects;
 drop policy if exists "authenticated users upload files" on storage.objects;
