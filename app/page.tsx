@@ -33,13 +33,14 @@ export default function Home() {
     const client = supabase
     const channel = client.channel('questions-live').on('postgres_changes', { event: '*', schema: 'public', table: 'questions' }, () => loadQuestions()).subscribe()
     loadQuestions()
-    return () => { client.removeChannel(channel) }
+    return () => { void client.removeChannel(channel) }
   }, [])
 
   async function loadQuestions() {
-    if (!supabase) return
-    const { data } = await supabase.from('questions').select('id,text,image_path,claimed_by,claimed_until,created_at,profiles(display_name)').eq('status', 'open').order('created_at', { ascending: false })
-    if (data) setQuestions(data.map((item: any) => ({ id: item.id, text: item.text, author: item.profiles?.display_name || 'Membre', time: new Date(item.created_at).toLocaleString('fr-FR'), claimedBy: item.claimed_by, claimedUntil: item.claimed_until, image: item.image_path ? supabase.storage.from('question-images').getPublicUrl(item.image_path).data.publicUrl : undefined })))
+    const client = supabase
+    if (!client) return
+    const { data } = await client.from('questions').select('id,text,image_path,claimed_by,claimed_until,created_at,profiles(display_name)').eq('status', 'open').order('created_at', { ascending: false })
+    if (data) setQuestions(data.map((item: any) => ({ id: item.id, text: item.text, author: item.profiles?.display_name || 'Membre', time: new Date(item.created_at).toLocaleString('fr-FR'), claimedBy: item.claimed_by, claimedUntil: item.claimed_until, image: item.image_path ? client.storage.from('question-images').getPublicUrl(item.image_path).data.publicUrl : undefined })))
   }
 
   useEffect(() => {
