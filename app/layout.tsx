@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Réponses humaines',
-  description: 'Posez une question, obtenez une réponse humaine.',
+  title: 'HumainGPT — Des réponses humaines',
+  description: 'Pose une question, partage une image et échange avec de vraies personnes.',
 }
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

@@ -41,18 +41,32 @@ alter table public.questions enable row level security;
 alter table public.answers enable row level security;
 alter table public.reports enable row level security;
 
+drop policy if exists "profiles are public" on public.profiles;
+drop policy if exists "users create their profile" on public.profiles;
+drop policy if exists "users update their profile" on public.profiles;
 create policy "profiles are public" on public.profiles for select using (true);
 create policy "users create their profile" on public.profiles for insert with check (auth.uid() = id);
 create policy "users update their profile" on public.profiles for update using (auth.uid() = id);
 
-create policy "anyone reads visible questions" on public.questions for select using (status = 'open' or author_id = auth.uid());
+drop policy if exists "anyone reads visible questions" on public.questions;
+create policy "anyone reads visible questions" on public.questions for select using (
+  status = 'open'
+  or author_id = auth.uid()
+  or exists (select 1 from public.answers where answers.question_id = questions.id and answers.author_id = auth.uid())
+);
+drop policy if exists "signed in users ask" on public.questions;
+drop policy if exists "authors update questions" on public.questions;
 create policy "signed in users ask" on public.questions for insert with check (auth.uid() = author_id);
 create policy "authors update questions" on public.questions for update using (auth.uid() = author_id or auth.uid() = claimed_by);
 
+drop policy if exists "anyone reads answers" on public.answers;
 create policy "anyone reads answers" on public.answers for select using (true);
+drop policy if exists "signed in users answer" on public.answers;
+drop policy if exists "authors update answers" on public.answers;
 create policy "signed in users answer" on public.answers for insert with check (auth.uid() = author_id);
 create policy "authors update answers" on public.answers for update using (auth.uid() = author_id);
 
+drop policy if exists "signed in users report" on public.reports;
 create policy "signed in users report" on public.reports for insert with check (auth.uid() = reporter_id);
 
 create or replace function public.claim_question(question_uuid uuid)
@@ -79,9 +93,26 @@ returns void language sql security definer as $$
   where status = 'open' and claimed_until is not null and claimed_until < now();
 $$;
 
-alter publication supabase_realtime add table public.questions;
-alter publication supabase_realtime add table public.answers;
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication p
+    join pg_publication_rel r on r.prpubid = p.oid
+    where p.pubname = 'supabase_realtime' and r.prrelid = 'public.questions'::regclass
+  ) then
+    alter publication supabase_realtime add table public.questions;
+  end if;
+  if not exists (
+    select 1 from pg_publication p
+    join pg_publication_rel r on r.prpubid = p.oid
+    where p.pubname = 'supabase_realtime' and r.prrelid = 'public.answers'::regclass
+  ) then
+    alter publication supabase_realtime add table public.answers;
+  end if;
+end $$;
 
 insert into storage.buckets (id, name, public) values ('question-images', 'question-images', true) on conflict (id) do nothing;
+drop policy if exists "authenticated users upload images" on storage.objects;
+drop policy if exists "anyone reads question images" on storage.objects;
 create policy "authenticated users upload images" on storage.objects for insert to authenticated with check (bucket_id = 'question-images');
 create policy "anyone reads question images" on storage.objects for select using (bucket_id = 'question-images');

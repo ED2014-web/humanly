@@ -1,6 +1,6 @@
-# Humanly
+# HumainGPT
 
-MVP d’une communauté de questions et réponses exclusivement humaines.
+Communauté de questions et réponses exclusivement humaines, avec historique, images et dessins.
 
 ## Lancer localement
 
@@ -11,7 +11,7 @@ npm run dev
 
 Puis ouvrir http://localhost:3000.
 
-La version utilise Supabase lorsqu’il est configuré : authentification email/mot de passe, questions partagées et mises à jour en temps réel. Sans variables Supabase, l’interface affiche un avertissement et aucune fausse connexion n’est autorisée.
+La version utilise Supabase lorsqu’il est configuré : authentification email/mot de passe, historique des conversations, questions partagées, images, dessins et mises à jour en temps réel. Sans variables Supabase, l’interface affiche un avertissement et aucune fausse connexion n’est autorisée.
 
 ## Configuration Supabase
 
@@ -32,4 +32,4 @@ Pour rendre l’application réellement multi-utilisateurs et accessible à tous
 6. Ajouter les variables `NEXT_PUBLIC_SUPABASE_URL` et `NEXT_PUBLIC_SUPABASE_ANON_KEY` dans Vercel.
 7. Importer le dépôt GitHub dans Vercel.
 
-Le verrouillage d’une question devra être validé côté serveur avec une expiration atomique (`claimed_until`), et non uniquement dans le navigateur. Cela évite que deux utilisateurs réservent la même question.
+Le verrouillage d’une question est validé côté serveur avec une expiration atomique (`claimed_until`), et non uniquement dans le navigateur. Les images et dessins sont envoyés dans le bucket `question-images`, puis référencés par les tables `questions` et `answers`. Pour une base existante, réexécute le script SQL : ses politiques sont idempotentes pour les éléments mis à jour.
