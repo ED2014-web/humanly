@@ -219,30 +219,35 @@ export default function Home() {
   async function submitQuestion(event: FormEvent) {
     event.preventDefault()
     const client = supabase
-    if (!client || !loggedIn) { setAuthOpen(true); return }
+    if (!client) { setAuthOpen(true); return }
     if (!draft.trim() || draft.trim().length < 3) { setNotice('Écris au moins trois caractères pour poser ta question.'); return }
+    const { data: auth } = await client.auth.getUser()
+    if (!auth.user) { setAuthOpen(true); return }
+    const authorId = auth.user.id
     let imagePath: string | undefined
     if (questionImage) {
-      const upload = await uploadImage(questionImage, currentUserId, 'questions')
+      const upload = await uploadImage(questionImage, authorId, 'questions')
       if (upload.error) { setNotice(`L’image n’a pas pu être envoyée : ${upload.error.message}`); return }
       imagePath = upload.path
     }
-    const { data: createdQuestion, error } = await client.from('questions').insert({ author_id: currentUserId, text: draft.trim(), image_path: imagePath }).select('id,created_at').single()
+    const { data: createdQuestion, error } = await client.rpc('create_question', { question_text: draft.trim(), question_image_path: imagePath || null })
     if (error) setNotice(error.message); else if (createdQuestion?.id) {
-      const newQuestion: Question = { id: createdQuestion.id, author: user || 'Vous', authorId: currentUserId, text: draft.trim(), time: new Date(createdQuestion.created_at || Date.now()).toLocaleString('fr-FR'), status: 'open', answers: [] }
+      const newQuestion: Question = { id: createdQuestion.id, author: auth.user.user_metadata?.display_name || user || 'Vous', authorId, text: draft.trim(), time: new Date(createdQuestion.created_at || Date.now()).toLocaleString('fr-FR'), status: 'open', answers: [] }
       setQuestions(items => [newQuestion, ...items.filter(item => item.id !== newQuestion.id)])
       setActiveQuestionId(newQuestion.id)
       setDraft('')
       removeAttachment('question')
       setMode('ask')
       setNotice('Question envoyée. Une personne va pouvoir te répondre.')
-      await loadQuestions()
+      await loadQuestions(authorId)
     }
   }
 
   async function claimQuestion(question: Question) {
     const client = supabase
-    if (!client || !loggedIn) { setAuthOpen(true); return }
+    if (!client) { setAuthOpen(true); return }
+    const { data: auth } = await client.auth.getUser()
+    if (!auth.user) { setAuthOpen(true); return }
     if (claimedId) return
     const { error } = await client.rpc('claim_question', { question_uuid: question.id })
     if (error) { setNotice('Cette question vient probablement d’être réservée par quelqu’un.'); await loadQuestions(); return }
@@ -254,10 +259,13 @@ export default function Home() {
   async function submitAnswer(event: FormEvent) {
     event.preventDefault()
     const client = supabase
-    if (!client || !loggedIn || !claimedId || (!answer.trim() && !answerImage)) return
+    if (!client || !claimedId || (!answer.trim() && !answerImage)) return
+    const { data: auth } = await client.auth.getUser()
+    if (!auth.user) { setAuthOpen(true); return }
+    const answerAuthorId = auth.user.id
     let imagePath: string | undefined
     if (answerImage) {
-      const upload = await uploadImage(answerImage, currentUserId, 'answers')
+      const upload = await uploadImage(answerImage, answerAuthorId, 'answers')
       if (upload.error) { setNotice(`Le fichier n’a pas pu être envoyé : ${upload.error.message}`); return }
       imagePath = upload.path
     }

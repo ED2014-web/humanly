@@ -84,6 +84,29 @@ create policy "signed in users ask" on public.questions for insert with check (
   ))
 );
 -- Les questions ne sont plus modifiables directement par le navigateur. Les changements sensibles passent par une fonction contrôlée.
+create or replace function public.create_question(question_text text, question_image_path text default null)
+returns public.questions
+language plpgsql
+security definer
+set search_path = public, pg_catalog
+as $$
+declare result public.questions;
+begin
+  if auth.uid() is null then raise exception 'AUTHENTICATION_REQUIRED'; end if;
+  if char_length(trim(coalesce(question_text, ''))) < 3 or char_length(trim(question_text)) > 2000 then raise exception 'QUESTION_INVALID'; end if;
+  if question_image_path is not null and (
+    (storage.foldername(question_image_path))[1] <> 'questions'
+    or (storage.foldername(question_image_path))[2] <> auth.uid()::text
+  ) then raise exception 'INVALID_ATTACHMENT_PATH'; end if;
+  insert into public.questions (author_id, text, image_path)
+  values (auth.uid(), trim(question_text), question_image_path)
+  returning * into result;
+  return result;
+end;
+$$;
+
+revoke all on function public.create_question(text, text) from public;
+grant execute on function public.create_question(text, text) to authenticated;
 
 drop policy if exists "anyone reads answers" on public.answers;
 drop policy if exists "signed in users answer" on public.answers;
@@ -158,6 +181,7 @@ as $$
 $$;
 
 revoke all on function public.claim_question(uuid) from public;
+revoke all on function public.create_question(text, text) from public;
 revoke all on function public.submit_answer(uuid, text, text) from public;
 revoke all on function public.release_expired_claims() from public;
 grant execute on function public.claim_question(uuid) to authenticated;
