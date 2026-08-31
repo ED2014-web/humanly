@@ -19,7 +19,7 @@ npm test
 
 Le test vérifie qu’une conversation active reste récupérable après une actualisation et qu’elle peut être rouverte depuis l’historique.
 
-La version utilise Supabase lorsqu’il est configuré : authentification email/mot de passe, historique des conversations, questions partagées, pièces jointes, dessins et mises à jour en temps réel. Sans variables Supabase, l’interface affiche un avertissement et aucune fausse connexion n’est autorisée. Les pièces jointes passent par une route serveur qui contrôle le nom, l’extension, le MIME déclaré, la signature binaire, la taille et validation binaire avant stockage.
+La version utilise Supabase lorsqu’il est configuré : authentification email/mot de passe, historique des conversations, questions partagées, pièces jointes, dessins et mises à jour en temps réel. Sans variables Supabase, l’interface affiche un avertissement et aucune fausse connexion n’est autorisée. Les pièces jointes passent par une route serveur qui contrôle le nom, l’extension, le MIME déclaré, la signature binaire, la taille et validation binaire avant stockage. **Les fichiers sont automatiquement supprimés après 24 heures** et **chaque utilisateur est limité à 2 fichiers par jour** (question ou réponse).
 
 ## Configuration Supabase
 
@@ -43,4 +43,4 @@ Pour rendre l’application réellement multi-utilisateurs et accessible à tous
 
 Les extensions exécutables, scripts à risque et SVG sont bloqués, et les formats autorisés sont contrôlés par signature binaire lorsque cela est possible.
 
-Le verrouillage d’une question est validé côté serveur avec une expiration atomique (`claimed_until`), et non uniquement dans le navigateur. Les pièces jointes et dessins sont envoyés dans le bucket `question-images`, enregistrés comme uploads `clean`, puis référencés par les tables `questions`, `answers` et `messages`. Pour une base existante, réexécute le script SQL : ses politiques sont idempotentes pour les éléments mis à jour.
+Le verrouillage d’une question est validé côté serveur avec une expiration atomique (`claimed_until`), et non uniquement dans le navigateur. Le cron Vercel (`/api/files/cleanup`) s’exécute chaque heure pour supprimer les fichiers expirés. Les pièces jointes et dessins sont envoyés dans le bucket `question-images`, enregistrés comme uploads `clean`, puis référencés par les tables `questions`, `answers` et `messages`. Pour une base existante, réexécute le script SQL : ses politiques sont idempotentes pour les éléments mis à jour.
